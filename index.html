@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+  font-family: sans-serif;
+}
+
+.number, .yaku {
+  display: inline-block;
+  padding: 6px;
+  margin: 4px;
+  border: 1px solid black;
+  cursor: pointer;
+  font-size: 13px;
+  background: white;
+}
+
+.disabled { background: #ccc; }
+.roleLocked { background: #aaa; }
+.roleExcluded { background: #fff3cd; border: 1px dashed #c98b00; }
+.selected { background: #90ee90; }
+
+.dexInput {
+  width: 45px;
+  margin-left: 5px;
+}
+
+.sortButtons {
+  margin-bottom: 10px;
+}
+
+.sortButtons button {
+  margin-right: 5px;
+  padding: 5px 10px;
+}
+
+.hoverBox {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid black;
+}
+
+#hoverInfo {
+  width: 100%;
+  height: 260px;
+  min-height: 80px;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 8px;
+}
+
+.infoControls {
+  margin-top: 6px;
+}
+
+.infoControls button {
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+#infoStatus {
+  font-size: 12px;
+  color: #666;
+  margin-left: 8px;
+}
+</style>
+</head>
+
+<body>
+
+<h3>札（24枚）</h3>
+
+<div class="sortButtons">
+  <button onclick="sortNumbers('asc')">DEX昇順</button>
+  <button onclick="sortNumbers('desc')">DEX降順</button>
+  <button onclick="sortNumbers('original')">元の順番</button>
+</div>
+
+<div id="numbers"></div>
+
+<h3>役（19種）</h3>
+<div id="yakus"></div>
+
+<button onclick="nextTurn()">次のターン（全解除）</button>
+
+<h3>情報</h3>
+
+<div class="hoverBox">
+  <textarea id="hoverInfo"
+    placeholder="札または役にマウスを乗せると情報が表示されます。ここで自由に編集できます。"
+    disabled></textarea>
+
+  <div class="infoControls">
+    <button onclick="resetInfo()">初期状態に戻す</button>
+    <span id="infoStatus">札・役を選択してください</span>
+  </div>
+</div>
+
+<script>
+
+// --- 基本設定 ---
+
+const numberDiv = document.getElementById("numbers");
+const yakuDiv = document.getElementById("yakus");
+const hoverInfo = document.getElementById("hoverInfo");
+const infoStatus = document.getElementById("infoStatus");
+
+// --- 札データ ---
+
+const cards = {
+1:"松に鶴",
+2:"松の短冊",
+3:"梅に鶯",
+4:"梅の短冊",
+5:"桜に幕",
+6:"桜の短冊",
+7:"藤に時鳥",
+8:"藤の短冊",
+9:"菖蒲に八ツ橋",
+10:"菖蒲の短冊",
+11:"牡丹に蝶",
+12:"牡丹の短冊",
+13:"萩に猪",
+14:"萩の短冊",
+15:"芒に月",
+16:"芒に雁",
+17:"菊に盃",
+18:"菊の短冊",
+19:"紅葉に鹿",
+20:"紅葉の短冊",
+21:"柳に男",
+22:"柳に燕",
+23:"柳の短冊",
+24:"桐に鳳凰"
+};
+
+const nameToNumber = Object.fromEntries(
+  Object.entries(cards).map(([k,v]) => [v, Number(k)])
+);
+
+// --- 役データ ---
+
+const yakus = [
+
+{
+name:"華舞:五光",
+cards:["松に鶴","桜に幕","芒に月","柳に男","桐に鳳凰"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【花舞:華合わせ】【華舞:八八】【華舞:こいこい】",
+cost:"花舞を振る際（発動の成功・失敗問わず）",
+effect:"盤面にいるHPが0以下の役者をHP10まで回復させる。（上限突破なし）"
+},
+
+{
+name:"こいこい:五光",
+cards:["松に鶴","桜に幕","芒に月","柳に男","桐に鳳凰"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:こいこい】",
+cost:"花舞を振る際（発動の成功・失敗問わず）",
+effect:"その時点で発狂している味方全員の一次的発狂、不定の狂気、永久的発狂を解除する。"
+},
+
+{
+name:"華合わせ:四光",
+cards:["松に鶴","桜に幕","芒に月","桐に鳳凰"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:華合わせ】",
+cost:"発動時",
+effect:"その戦闘中、その時点で場盤面にいる敵のダメージロールすべてに-[3+1d3]の補正をつける。"
+},
+
+{
+name:"八八:表菅原",
+cards:["松に鶴","梅に鶯","桜に幕"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞八八】",
+cost:"発動時",
+effect:"その戦闘中、表菅原役者3名に、特殊ステータス〝不屈〟付与。"
+},
+
+{
+name:"八八:裏菅原",
+cards:["松の短冊","梅の短冊","桜の短冊"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞八八】",
+cost:"発動時",
+effect:"次のターンの攻撃ロールで、‐10％で攻撃技能を二回ロールできる。(合計三回攻撃できる。)"
+},
+
+{
+name:"華合わせ:松桐坊主",
+cards:["松に鶴","芒に月","桐に鳳凰"],
+declare:"任意",
+activate:"任意",
+condition:"全員【華舞:華合わせ】",
+cost:"発動時",
+effect:"味方が即死級のダメージを受けた際に1d6名でダメージを等分し代わりに受ける。\n被ダメージを等分役者には必ず松桐坊主を発動した役者1名が必ず含まれ、それ以外の味方については任意で指定可能。\n各ラウンド1回まで発動可能。"
+},
+
+{
+name:"こいこい:雨四光",
+cards:["松に鶴","桜に幕","芒に月","柳に男","桐に鳳凰"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:こいこい】",
+cost:"発動時",
+effect:"任意の役者1名のステータスを複製し、任意の特殊ステータスを自分たち含むの役者[3+1d2]名に付与する。"
+},
+
+{
+name:"八八:飲み",
+cards:["桜に幕","芒に月","菊に盃"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:八八】",
+cost:"発動時",
+effect:"味方5名のHPを[5+1d5]回復する。"
+},
+
+{
+name:"こいこい:花見酒・月見酒",
+cards:["桜に幕","芒に月","菊に盃"],
+declare:"任意",
+activate:"任意",
+condition:"全員【華舞:こいこい】",
+cost:"発動時",
+effect:"発動した役者のHPを－[1d3]し、味方全員のMPを[10+1d10]回復。"
+},
+
+{
+name:"華合わせ:雨流し",
+cards:["柳に男","柳に燕","柳の短冊"],
+declare:"任意",
+activate:"任意",
+condition:"全員【華舞:華合わせ】",
+cost:"花舞を振る際（発動の成功・失敗問わず）。",
+effect:"敵がロールするダイスの成功を一段階下げることができる。決定的成功の場合は通常成功にできるが、失敗を致命的失敗にすることはできない。\n各ラウンド1回まで発動可能。"
+},
+
+{
+name:"華合わせ:種",
+cards:["梅に鶯","藤に時鳥","菖蒲に八ツ橋","芒に雁","菊に盃"],
+declare:"攻撃ラウンド中自分の手番",
+activate:"攻撃ラウンド中自分の手番",
+condition:"1名【華舞:華合わせ】",
+cost:"発動時",
+effect:"任意の味方最大3名を、任意の地点まで移動させる。"
+},
+
+{
+name:"こいこい:種",
+cards:["梅に鶯","藤に時鳥","菖蒲に八ツ橋","牡丹に蝶","萩に猪","芒に雁","菊に盃","紅葉に鹿","柳に燕"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"7名【華舞:こいこい】",
+cost:"発動時",
+effect:"全員の与ダメージ、回復効果に＋［1］の固定補正を与える。重ね掛け不可。"
+},
+
+{
+name:"八八:種",
+cards:["藤に時鳥","菖蒲に八ツ橋","牡丹に蝶","萩に猪","芒に雁","菊に盃","紅葉に鹿","柳に燕"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"5名【華舞:八八】",
+cost:"発動時",
+effect:"盤面にいる敵全体[3+1d（成功人数ぶん）]のダメージを与える。\n5名が成功したあと、残りの役者もロールを行い、ダメージ値の加算を試みることも可能。"
+},
+
+{
+name:"華合わせ:猪鹿蝶",
+cards:["萩に猪","紅葉に鹿","牡丹に蝶"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:華合わせ】",
+cost:"発動時",
+effect:"その戦闘中、任意の[1d3+3]名に、装甲貫通能力をつける。"
+},
+
+{
+name:"華合わせ:短冊",
+cards:["松の短冊","梅の短冊","桜の短冊","藤の短冊","菖蒲の短冊","牡丹の短冊","萩の短冊","菊の短冊","紅葉の短冊","柳の短冊"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"5名【華舞:華合わせ】",
+cost:"発動時",
+effect:"役者5名に特殊ステータス風花を付与。"
+},
+
+{
+name:"八八:赤短",
+cards:["藤の短冊","菖蒲の短冊","萩の短冊","柳の短冊"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:八八】",
+cost:"発動時",
+effect:"全員が[1d30]を追加でロールし、その合計値を持ち点として、特殊ステータス助舟を獲得する。\n助舟の効果が消えるまでは再使用不可。\n効果は3R継続する。"
+},
+
+{
+name:"こいこい:赤短",
+cards:["藤の短冊","菖蒲の短冊","萩の短冊","柳の短冊"],
+declare:"攻撃ラウンド中自分の手番",
+activate:"攻撃ラウンド中自分の手番",
+condition:"全員【華舞:こいこい】",
+cost:"発動時",
+effect:"その戦闘中、役者5名に、特殊ステータス可視を付与する。"
+},
+
+{
+name:"こいこい:裏菅原",
+cards:["松の短冊","梅の短冊","桜の短冊"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:こいこい】",
+cost:"花舞を振る際（発動の成功・失敗問わず）",
+effect:"その戦闘中、任意の[1d3+3]名に、装甲貫通能力をつける。"
+},
+
+{
+name:"八八:青短",
+cards:["牡丹の短冊","菊の短冊","紅葉の短冊"],
+declare:"攻撃ラウンド開始前",
+activate:"攻撃ラウンド開始前",
+condition:"全員【華舞:八八】",
+cost:"発動時",
+effect:"任意の味方3名に特殊ステータス障壁を付与。"
+},
+
+{
+name:"こいこい:青短",
+cards:["牡丹の短冊","菊の短冊","紅葉の短冊"],
+declare:"攻撃ラウンド中自分の手番",
+activate:"攻撃ラウンド中自分の手番",
+condition:"全員【華舞:こいこい】",
+cost:"発動時",
+effect:"その戦闘中、全員の〈花舞〉に＋10%の補正を与える。\n効果は4R継続する。\nまた、効果発動中に再度〈青短・こいこい〉に成功することで効果継続ラウンドをリセットできる。"
+}
+
+];
+
+// --- 状態管理 ---
+
+let manuallyDisabledCards = new Set();
+let selectedYakus = new Set();
+let roleCardExclusions = new Map();
+
+let currentSort = "original";
+
+let dexValues = loadStorage("hanafudaDexValues", {});
+
+let customInfo = loadStorage("hanafudaCustomInfo", {});
+
+let activeInfoKey = null;
+let infoLocked = false; // 右クリックで情報欄を固定
+
+// --- 保存・読み込み ---
+
+function loadStorage(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch(e) {
+    return fallback;
+  }
+}
+
+function saveDexValues() {
+  localStorage.setItem(
+    "hanafudaDexValues",
+    JSON.stringify(dexValues)
+  );
+}
+
+function saveCustomInfo() {
+  localStorage.setItem(
+    "hanafudaCustomInfo",
+    JSON.stringify(customInfo)
+  );
+}
+
+// --- 情報欄の初期文章 ---
+
+function getOriginalCardInfo(name) {
+
+  const relatedYakus = yakus
+    .filter(y => y.cards.includes(name))
+    .map(y => y.name);
+
+  let text = `札情報：${name}\n\n含まれる役：`;
+
+  if (relatedYakus.length === 0) {
+    text += "\nなし";
+  } else {
+    text += "\n・" + relatedYakus.join("\n・");
+  }
+
+  return text;
+}
+
+function getOriginalYakuInfo(y) {
+
+  return `必要札：${y.cards.join("、")}\n宣言：${y.declare}\n発動：${y.activate}\n条件：${y.condition}\nコスト：${y.cost}\n効果：${y.effect}`;
+}
+
+// --- 情報欄の表示・編集 ---
+
+function showInfo(key, originalText, label, force = false) {
+
+  // 固定中は、右クリックなど明示的な切り替え以外で情報を変更しない
+  if (infoLocked && !force) return;
+
+  activeInfoKey = key;
+
+  hoverInfo.disabled = false;
+
+  hoverInfo.value =
+    Object.prototype.hasOwnProperty.call(customInfo, key)
+      ? customInfo[key]
+      : originalText;
+
+  infoStatus.innerText = (infoLocked ? " 編集固定中：" : "") + label + " の情報を編集中";
+}
+
+function toggleInfoLock(key, originalText, label) {
+
+  // 同じ対象を右クリックした場合は固定解除
+  if (infoLocked && activeInfoKey === key) {
+    infoLocked = false;
+    infoStatus.innerText = label + " の情報を編集中（固定解除）";
+    return;
+  }
+
+  // 別の対象を右クリックした場合は、その対象に切り替えて固定
+  infoLocked = true;
+  showInfo(key, originalText, label, true);
+  infoStatus.innerText = " 編集固定中：" + label + "（右クリックで解除）";
+}
+
+hoverInfo.addEventListener("input", () => {
+
+  if (activeInfoKey === null) return;
+
+  customInfo[activeInfoKey] = hoverInfo.value;
+
+  saveCustomInfo();
+
+  infoStatus.innerText = "保存しました";
+
+});
+
+function resetInfo() {
+
+  if (activeInfoKey === null) return;
+
+  delete customInfo[activeInfoKey];
+
+  saveCustomInfo();
+
+  const key = activeInfoKey;
+
+  if (key.startsWith("card-")) {
+
+    const num = Number(key.replace("card-", ""));
+    const name = cards[num];
+
+    showInfo(
+      key,
+      getOriginalCardInfo(name),
+      name,
+      true
+    );
+
+  } else if (key.startsWith("yaku-")) {
+
+    const index = Number(key.replace("yaku-", ""));
+    const y = yakus[index];
+
+    showInfo(
+      key,
+      getOriginalYakuInfo(y),
+      y.name,
+      true
+    );
+
+  }
+
+  infoStatus.innerText = infoLocked
+    ? "編集固定中：初期状態に戻しました（右クリックで解除）"
+    : "初期状態に戻しました";
+
+}
+
+// --- DEX ---
+
+function getDex(num) {
+
+  const value = dexValues[num];
+
+  if (value === undefined || value === "")
+    return null;
+
+  const n = Number(value);
+
+  if (!Number.isFinite(n))
+    return null;
+
+  return n;
+}
+
+// --- 使用済み札 ---
+
+function getRoleExclusions(roleIndex) {
+  return roleCardExclusions.get(roleIndex) || new Set();
+}
+
+function getRoleOwner(cardNumber) {
+  let excludedOwner = null;
+
+  for (const roleIndex of selectedYakus) {
+    const hasCard = yakus[roleIndex].cards.some(
+      card => nameToNumber[card] === cardNumber
+    );
+
+    if (!hasCard) continue;
+
+    if (!getRoleExclusions(roleIndex).has(cardNumber)) {
+      return roleIndex;
+    }
+
+    if (excludedOwner === null) {
+      excludedOwner = roleIndex;
+    }
+  }
+
+  return excludedOwner;
+}
+
+function getUsedByRole() {
+  const used = new Set();
+
+  selectedYakus.forEach(roleIndex => {
+    const excluded = getRoleExclusions(roleIndex);
+
+    yakus[roleIndex].cards.forEach(card => {
+      const number = nameToNumber[card];
+
+      if (!excluded.has(number)) {
+        used.add(number);
+      }
+    });
+  });
+
+  return used;
+}
+
+// --- 並び替え ---
+
+function sortNumbers(mode) {
+
+  currentSort = mode;
+
+  renderNumbers();
+
+}
+
+function getSortedCards() {
+
+  const entries = Object.entries(cards);
+
+  if (currentSort === "original")
+    return entries;
+
+  entries.sort((a, b) => {
+
+    const dexA = getDex(Number(a[0]));
+    const dexB = getDex(Number(b[0]));
+
+    if (dexA === null && dexB === null)
+      return Number(a[0]) - Number(b[0]);
+
+    if (dexA === null) return 1;
+    if (dexB === null) return -1;
+
+    if (currentSort === "asc")
+      return dexA - dexB;
+
+    return dexB - dexA;
+
+  });
+
+  return entries;
+}
+
+// --- 札の表示 ---
+
+function renderNumbers() {
+
+  numberDiv.innerHTML = "";
+
+  const usedByRole = getUsedByRole();
+
+  getSortedCards().forEach(([num, name]) => {
+
+    const n = Number(num);
+
+    const div = document.createElement("div");
+
+    div.className = "number";
+
+    const nameSpan = document.createElement("span");
+
+    nameSpan.innerText = `${num}:${name}`;
+
+    div.appendChild(nameSpan);
+
+    const dexLabel = document.createElement("span");
+
+    dexLabel.innerText = " DEX:";
+
+    div.appendChild(dexLabel);
+
+    const dexInput = document.createElement("input");
+
+    dexInput.type = "number";
+    dexInput.className = "dexInput";
+    dexInput.value = dexValues[n] ?? "";
+    dexInput.placeholder = "未入力";
+
+    dexInput.onclick = e => e.stopPropagation();
+    dexInput.onmousedown = e => e.stopPropagation();
+
+    dexInput.oninput = e => {
+
+      dexValues[n] = e.target.value;
+
+      saveDexValues();
+
+      if (currentSort !== "original") {
+        renderNumbers();
+      }
+
+    };
+
+    div.appendChild(dexInput);
+
+    const roleOwner = getRoleOwner(n);
+    const roleExcluded = roleOwner !== null &&
+      getRoleExclusions(roleOwner).has(n);
+
+    if (manuallyDisabledCards.has(n))
+      div.classList.add("disabled");
+
+    if (usedByRole.has(n))
+      div.classList.add("roleLocked");
+
+    if (roleExcluded) {
+      div.classList.add("roleExcluded");
+      div.title = "役から除外中（クリックで元に戻す）";
+    } else if (roleOwner !== null) {
+      div.title = "役で使用中（クリックでこの札だけ除外）";
+    }
+
+    div.onclick = () => {
+
+      const owner = getRoleOwner(n);
+
+      if (owner !== null) {
+        const excluded = new Set(getRoleExclusions(owner));
+
+        if (excluded.has(n))
+          excluded.delete(n);
+        else
+          excluded.add(n);
+
+        roleCardExclusions.set(owner, excluded);
+      } else {
+        if (manuallyDisabledCards.has(n))
+          manuallyDisabledCards.delete(n);
+        else
+          manuallyDisabledCards.add(n);
+      }
+
+      renderNumbers();
+      renderYakus();
+
+    };
+
+    div.onmouseenter = () => {
+
+      showInfo(
+        `card-${n}`,
+        getOriginalCardInfo(name),
+        name
+      );
+
+    };
+
+    // 右クリックで情報欄を固定／解除
+    div.oncontextmenu = e => {
+      e.preventDefault();
+      toggleInfoLock(`card-${n}`, getOriginalCardInfo(name), name);
+    };
+
+    numberDiv.appendChild(div);
+
+  });
+
+}
+
+// --- 役の表示 ---
+
+function renderYakus() {
+
+  yakuDiv.innerHTML = "";
+
+  yakus.forEach((y, i) => {
+
+    const div = document.createElement("div");
+
+    div.className = "yaku";
+    div.innerText = y.name;
+
+    const nums = y.cards.map(c => nameToNumber[c]);
+
+    const selected = selectedYakus.has(i);
+const usedByOtherSelectedRoles = getUsedByRole();
+    const roleBlocked = nums.some(n => usedByOtherSelectedRoles.has(n));
+
+    const manuallyBlocked = nums.some(
+      n => manuallyDisabledCards.has(n)
+    );
+
+    // 必要札が手動除外中、または別の選択中の役で使用中なら選択不可
+    const cannotUse = manuallyBlocked || roleBlocked;
+
+    if (cannotUse && !selected)
+      div.classList.add("disabled");
+
+    if (selected)
+      div.classList.add("selected");
+
+    div.onclick = () => {
+
+      if (cannotUse && !selected) return;
+
+      if (selected) {
+        selectedYakus.delete(i);
+        roleCardExclusions.delete(i);
+      } else {
+        selectedYakus.add(i);
+        roleCardExclusions.set(i, new Set());
+      }
+
+      renderYakus();
+      renderNumbers();
+
+    };
+
+    div.onmouseenter = () => {
+
+      showInfo(
+        `yaku-${i}`,
+        getOriginalYakuInfo(y),
+        y.name
+      );
+
+    };
+
+    // 右クリックで情報欄を固定／解除
+    div.oncontextmenu = e => {
+      e.preventDefault();
+      toggleInfoLock(`yaku-${i}`, getOriginalYakuInfo(y), y.name);
+    };
+
+    yakuDiv.appendChild(div);
+
+  });
+
+}
+
+// --- 次のターン ---
+
+function nextTurn() {
+
+  selectedYakus.clear();
+  roleCardExclusions.clear();
+
+  manuallyDisabledCards.clear();
+
+  renderYakus();
+  renderNumbers();
+
+}
+
+// --- 初期表示 ---
+
+renderYakus();
+renderNumbers();
+
+</script>
+
+</body>
+</html>
